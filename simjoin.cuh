@@ -30,7 +30,7 @@
 
 #include "inverted_index.cuh"
 
-__host__ int findSimilars(InvertedIndex inverted_index, float threshold, struct DeviceVariables *dev_vars, Similarity* distances,
+__host__ int findSimilars(InvertedIndex inverted_index, float threshold, int topk, bool topk_is_strict, struct DeviceVariables *dev_vars, Similarity* distances,
 		int docid, int querystart, int querysize);
 
 __global__ void calculateJaccardSimilarity(InvertedIndex inverted_index, Entry *d_query, int *index, int *dist, int D, int docid);

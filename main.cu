@@ -55,8 +55,8 @@ struct FileStats {
 	FileStats() : num_sets(0), num_terms(0) {}
 };
 
-FileStats readInputFile(string &file, vector<Entry> &entries);
-void processTestFile(InvertedIndex &index, FileStats &stats, string &file, float threshold, stringstream &fileout);
+FileStats readInputFile(string &file, vector<Entry> &entries, vector<string> &ids);
+void processTestFile(InvertedIndex &index, FileStats &stats, string &file, vector<string> &ids, float threshold, int topk, bool topk_is_strict, stringstream &fileout);
 
 
 /**
@@ -69,16 +69,27 @@ int biggestQuerySize = -1;
 
 int main(int argc, char **argv) {
 
-	if (argc != 5) {
-		cerr << "Wrong parameters. Correct usage: <executable> <input_file> <threshold> <output_file> <number_of_gpus>" << endl;
+	if (argc != 7) {
+		cerr << "Wrong parameters. Correct usage: <executable> <input_file> <threshold> <topk> <topk_mode> <output_file> <number_of_gpus>" << endl;
+		exit(1);
+	}
+
+	bool topk_is_strict;
+	string topk_mode(argv[4]);
+	if (topk_mode == "strict") {
+		topk_is_strict = true;
+	} else if (topk_mode == "soft") {
+		topk_is_strict = false;
+	} else {
+		cerr << "Wrong parameter 'topk_mode'. Must be 'strict' or 'soft'" << endl;
 		exit(1);
 	}
 
 	int gpuNum;
 	cudaGetDeviceCount(&gpuNum);
 
-	if (gpuNum > atoi(argv[4])){
-		gpuNum = atoi(argv[4]);
+	if (gpuNum > atoi(argv[6])) {
+		gpuNum = atoi(argv[6]);
 		if (gpuNum < 1)
 			gpuNum = 1;
 	}
@@ -91,10 +102,10 @@ int main(int argc, char **argv) {
 
 #if OUTPUT
 	//truncate output files
-	ofstream ofsf(argv[3], ofstream::trunc);
+	ofstream ofsf(argv[5], ofstream::trunc);
 	ofsf.close();
 
-	ofstream ofsfileoutput(argv[3], ofstream::out | ofstream::app);
+	ofstream ofsfileoutput(argv[5], ofstream::out | ofstream::app);
 #endif
 	vector<string> inputs;// to read the whole test file in memory
 	vector<InvertedIndex> indexes;
@@ -106,16 +117,17 @@ int main(int argc, char **argv) {
 
 	printf("Reading file...\n");
 	vector<Entry> entries;
+	vector<string> ids;
 
 	starts = gettime();
-	FileStats stats = readInputFile(inputFileName, entries);
+	FileStats stats = readInputFile(inputFileName, entries, ids);
 	ends = gettime();
 
 	printf("Time taken: %lf seconds\n", ends - starts);
 
 	vector<stringstream*> outputString;
 	//Each thread builds an output string, so it can be flushed at once at the end of the program
-	for (int i = 0; i < numThreads; i++){
+	for (int i = 0; i < numThreads; i++) {
 		outputString.push_back(new stringstream);
 	}
 
@@ -135,16 +147,17 @@ int main(int argc, char **argv) {
 	}
 
 
-	#pragma omp parallel 
+	#pragma omp parallel
 	{
 		int cpuid = omp_get_thread_num();
 		cudaSetDevice(cpuid / NUM_STREAMS);
 
 		float threshold = atof(argv[2]);
+		float topk = atof(argv[3]);
 
 		FileStats lstats = stats;
 
-		processTestFile(indexes[cpuid / NUM_STREAMS], lstats, inputFileName, threshold, *outputString[cpuid]);
+		processTestFile(indexes[cpuid / NUM_STREAMS], lstats, inputFileName, ids, threshold, topk, topk_is_strict, *outputString[cpuid]);
 		if (cpuid %  NUM_STREAMS == 0)
 			gpuAssert(cudaDeviceReset());
 
@@ -152,7 +165,7 @@ int main(int argc, char **argv) {
 
 #if OUTPUT
 		starts = gettime();
-		for (int i = 0; i < numThreads; i++){
+		for (int i = 0; i < numThreads; i++) {
 			ofsfileoutput << outputString[i]->str();
 		}
 		ends = gettime();
@@ -164,7 +177,7 @@ int main(int argc, char **argv) {
 		return 0;
 }
 
-FileStats readInputFile(string &filename, vector<Entry> &entries) {
+FileStats readInputFile(string &filename, vector<Entry> &entries, vector<string> &ids) {
 	ifstream input(filename.c_str());
 	string line;
 
@@ -176,7 +189,10 @@ FileStats readInputFile(string &filename, vector<Entry> &entries) {
 		getline(input, line);
 		if (line == "") continue;
 
-		vector<string> tokens = split(line, ' ');
+		vector<string> line_spl = split(line, ' ');
+		vector<string> tokens(line_spl.begin() + 1, line_spl.begin() + (int)line_spl.size());
+		ids.push_back(line_spl[0]);
+
 		biggestQuerySize = max((int)tokens.size(), biggestQuerySize);
 
 		int size = tokens.size();
@@ -199,7 +215,7 @@ FileStats readInputFile(string &filename, vector<Entry> &entries) {
 	return stats;
 }
 
-void allocVariables(DeviceVariables *dev_vars, float threshold, int num_sets, Similarity** distances){
+void allocVariables(DeviceVariables *dev_vars, float threshold, int num_sets, Similarity** distances) {
 	dim3 grid, threads;
 
 	get_grid_config(grid, threads);
@@ -222,7 +238,7 @@ void allocVariables(DeviceVariables *dev_vars, float threshold, int num_sets, Si
 
 }
 
-void freeVariables(DeviceVariables *dev_vars, InvertedIndex &index, Similarity** distances){
+void freeVariables(DeviceVariables *dev_vars, InvertedIndex &index, Similarity** distances) {
 	cudaFree(dev_vars->d_dist);
 	cudaFree(dev_vars->d_result);
 	cudaFree(dev_vars->d_sim);
@@ -235,14 +251,14 @@ void freeVariables(DeviceVariables *dev_vars, InvertedIndex &index, Similarity**
 
 	free(*distances);
 
-	if (omp_get_thread_num() % NUM_STREAMS == 0){
+	if (omp_get_thread_num() % NUM_STREAMS == 0) {
 		cudaFree(index.d_count);
 		cudaFree(index.d_index);
 		cudaFree(index.d_inverted_index);
 	}
 }
 
-void processTestFile(InvertedIndex &index, FileStats &stats, string &filename, float threshold, stringstream &outputfile) {
+void processTestFile(InvertedIndex &index, FileStats &stats, string &filename, vector<string> &ids, float threshold, int topk, bool topk_is_strict, stringstream &outputfile) {
 
 	int num_test_local = 0, setid;
 
@@ -259,17 +275,17 @@ void processTestFile(InvertedIndex &index, FileStats &stats, string &filename, f
 	double start = gettime();
 
 #pragma omp for
-	for (setid = 0; setid < index.num_sets - 1; setid++){
+	for (setid = 0; setid < index.num_sets - 1; setid++) {
 
 		num_test_local++;
 
-		int totalSimilars = findSimilars(index, threshold, &dev_vars, distances, setid, stats.start[setid], stats.sizes[setid]);
+		int totalSimilars = findSimilars(index, threshold, topk, topk_is_strict, &dev_vars, distances, setid, stats.start[setid], stats.sizes[setid]);
 
-		for (int i = 0; i < totalSimilars; i++) {
 #if OUTPUT
-			outputfile << "(" << setid << ", " << distances[i].set_id << "): " << distances[i].similarity << endl;
-#endif
+		for (int i = 0; i < totalSimilars; i++) {
+			outputfile << ids[setid] << "\t" << ids[distances[i].set_id] << "\t" << distances[i].similarity << endl;
 		}
+#endif
 
 	}
 

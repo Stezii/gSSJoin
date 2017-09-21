@@ -1,21 +1,21 @@
 /*********************************************************************
-11	
+11
 12	 Copyright (C) 2017 Sidney Ribeiro Junior
-13	
+13
 14	 This program is free software; you can redistribute it and/or modify
 15	 it under the terms of the GNU General Public License as published by
 16	 the Free Software Foundation; either version 2 of the License, or
 17	 (at your option) any later version.
-18	
+18
 19	 This program is distributed in the hope that it will be useful,
 20	 but WITHOUT ANY WARRANTY; without even the implied warranty of
 21	 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 22	 GNU General Public License for more details.
-23	
+23
 24	 You should have received a copy of the GNU General Public License
 25	 along with this program; if not, write to the Free Software
 26	 Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-27	
+27
 28	 ********************************************************************/
 
 /*
@@ -38,6 +38,9 @@ struct Entry {
 struct Similarity {
     int set_id;
     float similarity;
+
+    __host__ __device__ bool operator>(const Similarity &s) const { return (similarity > s.similarity); }
+    __host__ __device__ void operator=(const float sim) { similarity = sim; }
 };
 
 struct DeviceVariables{

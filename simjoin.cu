@@ -32,6 +32,8 @@
 #include <vector>
 #include <set>
 #include <functional>
+#include <thrust/device_vector.h>
+#include <thrust/sort.h>
 
 #include "simjoin.cuh"
 #include "structs.cuh"
@@ -39,20 +41,42 @@
 #include "inverted_index.cuh"
 #include "cuCompactor.cuh"
 
-
 struct is_bigger_than_threshold
 {
 	float threshold;
 	is_bigger_than_threshold(float thr) : threshold(thr) {};
 	__host__ __device__
-	bool operator()(const Similarity &reg)
+	bool operator()(const Similarity reg)
 	{
 		return (reg.similarity > threshold);
 	}
 };
 
+struct is_smaller_than_threshold
+{
+	float threshold;
+	is_smaller_than_threshold(float thr) : threshold(thr) {};
+	__host__ __device__
+	bool operator()(const Similarity reg)
+	{
+		return (reg.similarity < threshold);
+	}
+};
 
-__host__ int findSimilars(InvertedIndex inverted_index, float threshold, struct DeviceVariables *dev_vars, Similarity* distances,
+struct printSimilarity
+{
+	int docid;
+	printSimilarity(int di) : docid(di) {};
+  __host__ __device__
+  void operator()(const Similarity &reg)
+	{
+		if (reg.similarity > 0) {
+			printf("%i %i: %.10f\n", docid, reg.set_id, reg.similarity);
+		}
+	}
+};
+
+__host__ int findSimilars(InvertedIndex inverted_index, float threshold, int topk, bool topk_is_strict, struct DeviceVariables *dev_vars, Similarity* distances,
 		int docid, int querystart, int querysize) {
 
 	dim3 grid, threads;
@@ -76,10 +100,24 @@ __host__ int findSimilars(InvertedIndex inverted_index, float threshold, struct 
 
 	filter_registers<<<grid, threads>>>(d_sim, threshold, querysize, docid, inverted_index.num_sets, size_doc, d_similarity);
 
+	Similarity *sim_ptr = d_similarity + docid + 1;
+	thrust::device_vector<Similarity> thrust_d_similarity(sim_ptr, sim_ptr + num_sets);
+	thrust::sort(thrust_d_similarity.begin(), thrust_d_similarity.end(), thrust::greater<Similarity>());
+	if (thrust_d_similarity.size() > topk) {
+		if (topk_is_strict) {
+			thrust::fill(thrust_d_similarity.begin() + topk, thrust_d_similarity.end(), -1);
+		} else {
+			Similarity topk_sim = thrust_d_similarity[topk - 1];
+			thrust::replace_if(thrust_d_similarity.begin() + topk, thrust_d_similarity.end(), is_smaller_than_threshold(topk_sim.similarity), -1);
+		}
+	}
+	//thrust::for_each(thrust_d_similarity.begin(), thrust_d_similarity.end(), printSimilarity(docid));
+	thrust::copy(thrust_d_similarity.begin(), thrust_d_similarity.end(), sim_ptr);
+
 	int blocksize = 1024;
 	int numBlocks = cuCompactor::divup(num_sets, blocksize);
 
-	int totalSimilars = cuCompactor::compact2<Similarity>(d_similarity + docid + 1, d_result, num_sets, is_bigger_than_threshold(threshold), blocksize, numBlocks, d_BlocksCount, d_BlocksOffset);
+	int totalSimilars = cuCompactor::compact2<Similarity>(sim_ptr, d_result, num_sets, is_bigger_than_threshold(threshold), blocksize, numBlocks, d_BlocksCount, d_BlocksOffset);
 
 	if (totalSimilars) cudaMemcpyAsync(distances, d_result, sizeof(Similarity)*totalSimilars, cudaMemcpyDeviceToHost);
 
