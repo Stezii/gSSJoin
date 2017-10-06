@@ -31,9 +31,9 @@
 #include "inverted_index.cuh"
 
 __host__ int findSimilars(InvertedIndex inverted_index, float threshold, int topk, bool topk_is_strict, struct DeviceVariables *dev_vars, Similarity* distances,
-		int docid, int querystart, int querysize);
+		int docid, int querystart, int querysize, int weighted_querysize);
 
-__global__ void calculateJaccardSimilarity(InvertedIndex inverted_index, Entry *d_query, int *index, int *dist, int D, int docid);
+__global__ void calculateJaccardSimilarity(InvertedIndex inverted_index, Entry *d_query, int *index, int *dist, int D, int docid, int *token_weights);
 
 __global__ void get_term_count_and_tf_idf(InvertedIndex inverted_index, Entry *query, int *count, int N);
 

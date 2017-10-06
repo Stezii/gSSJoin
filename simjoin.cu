@@ -77,13 +77,13 @@ struct printSimilarity
 };
 
 __host__ int findSimilars(InvertedIndex inverted_index, float threshold, int topk, bool topk_is_strict, struct DeviceVariables *dev_vars, Similarity* distances,
-		int docid, int querystart, int querysize) {
+		int docid, int querystart, int querysize, int weighted_querysize) {
 
 	dim3 grid, threads;
 	get_grid_config(grid, threads);
 
 	int num_sets = inverted_index.num_sets - docid - 1;
-	int *d_count = dev_vars->d_count, *d_index = dev_vars->d_index, *d_sim = dev_vars->d_sim, *size_doc = dev_vars->d_sizes;
+	int *d_count = dev_vars->d_count, *d_index = dev_vars->d_index, *d_sim = dev_vars->d_sim, *weighted_size_doc = dev_vars->d_wsizes, *token_weights = dev_vars->d_tokweights;
 	int *d_BlocksCount = dev_vars->d_bC, *d_BlocksOffset = dev_vars->d_bO;
 	Entry *d_query = inverted_index.d_entries + querystart;
 	Similarity *d_similarity = dev_vars->d_dist, *d_result = dev_vars->d_result;
@@ -96,9 +96,9 @@ __host__ int findSimilars(InvertedIndex inverted_index, float threshold, int top
 	thrust::device_ptr<int> thrust_d_index(d_index);
 	thrust::inclusive_scan(thrust_d_count, thrust_d_count + querysize, thrust_d_index);
 
-	calculateJaccardSimilarity<<<grid, threads>>>(inverted_index, d_query, d_index, d_sim, querysize, docid);
+	calculateJaccardSimilarity<<<grid, threads>>>(inverted_index, d_query, d_index, d_sim, querysize, docid, token_weights);
 
-	filter_registers<<<grid, threads>>>(d_sim, threshold, querysize, docid, inverted_index.num_sets, size_doc, d_similarity);
+	filter_registers<<<grid, threads>>>(d_sim, threshold, weighted_querysize, docid, inverted_index.num_sets, weighted_size_doc, d_similarity);
 
 	Similarity *sim_ptr = d_similarity + docid + 1;
 	thrust::device_vector<Similarity> thrust_d_similarity(sim_ptr, sim_ptr + num_sets);
@@ -124,7 +124,7 @@ __host__ int findSimilars(InvertedIndex inverted_index, float threshold, int top
 	return totalSimilars;
 }
 
-__global__ void calculateJaccardSimilarity(InvertedIndex inverted_index, Entry *d_query, int *index, int *dist, int D, int docid) {
+__global__ void calculateJaccardSimilarity(InvertedIndex inverted_index, Entry *d_query, int *index, int *dist, int D, int docid, int *token_weights) {
 	__shared__ int N;
 
 	if (threadIdx.x == 0) {
@@ -161,7 +161,7 @@ __global__ void calculateJaccardSimilarity(InvertedIndex inverted_index, Entry *
 		Entry index_entry = inverted_index.d_inverted_index[idx2];
 
 		if (index_entry.set_id > docid) {
-			atomicAdd(&dist[index_entry.set_id], 1);
+			atomicAdd(&dist[index_entry.set_id], token_weights[entry.term_id]);
 		}
 	}
 }

@@ -50,12 +50,14 @@ struct FileStats {
 	int num_terms;
 
 	vector<int> sizes; // set sizes
-	vector<int> start; // beginning of each entrie
+	vector<int> weighted_sizes; // weighted set sizes
+	vector<int> start; // beginning of each entry
+	vector<int> token_weights; // weights of each token
 
 	FileStats() : num_sets(0), num_terms(0) {}
 };
 
-FileStats readInputFile(string &file, vector<Entry> &entries, vector<string> &ids);
+FileStats readInputFiles(string &sets_filename, string &weights_filename, vector<Entry> &entries, vector<string> &ids);
 void processTestFile(InvertedIndex &index, FileStats &stats, string &file, vector<string> &ids, float threshold, int topk, bool topk_is_strict, stringstream &fileout);
 
 
@@ -69,13 +71,13 @@ int biggestQuerySize = -1;
 
 int main(int argc, char **argv) {
 
-	if (argc != 7) {
-		cerr << "Wrong parameters. Correct usage: <executable> <input_file> <threshold> <topk> <topk_mode> <output_file> <number_of_gpus>" << endl;
+	if (argc != 8) {
+		cerr << "Wrong parameters. Correct usage: <executable> <input_token_file> <input_weights_file> <threshold> <topk> <topk_mode> <output_file> <number_of_gpus>" << endl;
 		exit(1);
 	}
 
 	bool topk_is_strict;
-	string topk_mode(argv[4]);
+	string topk_mode(argv[5]);
 	if (topk_mode == "strict") {
 		topk_is_strict = true;
 	} else if (topk_mode == "soft") {
@@ -88,8 +90,8 @@ int main(int argc, char **argv) {
 	int gpuNum;
 	cudaGetDeviceCount(&gpuNum);
 
-	if (gpuNum > atoi(argv[6])) {
-		gpuNum = atoi(argv[6]);
+	if (gpuNum > atoi(argv[7])) {
+		gpuNum = atoi(argv[7]);
 		if (gpuNum < 1)
 			gpuNum = 1;
 	}
@@ -102,10 +104,10 @@ int main(int argc, char **argv) {
 
 #if OUTPUT
 	//truncate output files
-	ofstream ofsf(argv[5], ofstream::trunc);
+	ofstream ofsf(argv[6], ofstream::trunc);
 	ofsf.close();
 
-	ofstream ofsfileoutput(argv[5], ofstream::out | ofstream::app);
+	ofstream ofsfileoutput(argv[6], ofstream::out | ofstream::app);
 #endif
 	vector<string> inputs;// to read the whole test file in memory
 	vector<InvertedIndex> indexes;
@@ -113,14 +115,15 @@ int main(int argc, char **argv) {
 
 	double starts, ends;
 
-	string inputFileName(argv[1]);
+	string inputSetsFileName(argv[1]);
+	string inputWeightsFileName(argv[2]);
 
-	printf("Reading file...\n");
+	printf("Reading files...\n");
 	vector<Entry> entries;
 	vector<string> ids;
 
 	starts = gettime();
-	FileStats stats = readInputFile(inputFileName, entries, ids);
+	FileStats stats = readInputFiles(inputSetsFileName, inputWeightsFileName, entries, ids);
 	ends = gettime();
 
 	printf("Time taken: %lf seconds\n", ends - starts);
@@ -152,12 +155,12 @@ int main(int argc, char **argv) {
 		int cpuid = omp_get_thread_num();
 		cudaSetDevice(cpuid / NUM_STREAMS);
 
-		float threshold = atof(argv[2]);
-		float topk = atof(argv[3]);
+		float threshold = atof(argv[3]);
+		float topk = atof(argv[4]);
 
 		FileStats lstats = stats;
 
-		processTestFile(indexes[cpuid / NUM_STREAMS], lstats, inputFileName, ids, threshold, topk, topk_is_strict, *outputString[cpuid]);
+		processTestFile(indexes[cpuid / NUM_STREAMS], lstats, inputSetsFileName, ids, threshold, topk, topk_is_strict, *outputString[cpuid]);
 		if (cpuid %  NUM_STREAMS == 0)
 			gpuAssert(cudaDeviceReset());
 
@@ -177,16 +180,63 @@ int main(int argc, char **argv) {
 		return 0;
 }
 
-FileStats readInputFile(string &filename, vector<Entry> &entries, vector<string> &ids) {
-	ifstream input(filename.c_str());
+FileStats readInputFiles(string &sets_filename, string &weights_filename, vector<Entry> &entries, vector<string> &ids) {
 	string line;
-
 	FileStats stats;
+
+	// get number of terms and check weights file
+	ifstream input_weights(weights_filename.c_str());
+	stats.num_terms = 1; // must start at 1 for zero-based array access
+
+	while (!input_weights.eof()) {
+		getline(input_weights, line);
+		if (line == "") continue;
+
+		vector<string> line_spl = split(line, ' ');
+		int token = atoi(line_spl[0].c_str());
+		int weight = atoi(line_spl[1].c_str());
+		if (stats.num_terms == 1 && token != 1) {
+			cerr << "Error in " << weights_filename << ": First token id must be 1 in " << endl;
+			exit(1);
+		}
+		if (stats.num_terms != token) {
+			cerr << "Error in " << weights_filename << ": Token " << stats.num_terms << " is missing" << endl;
+			exit(1);
+		}
+		if (weight < 0) {
+			cerr << "Error in " << weights_filename << ": Token weight may not be smaller than 0" << endl;
+			exit(1);
+		}
+		stats.num_terms++;
+	}
+
+	// read weights
+	input_weights.clear();
+	input_weights.seekg(0, ios::beg);
+	int token_weights[stats.num_terms];
+
+	while (!input_weights.eof()) {
+		getline(input_weights, line);
+		if (line == "") continue;
+
+		vector<string> line_spl = split(line, ' ');
+		int token = atoi(line_spl[0].c_str());
+		int weight = atoi(line_spl[1].c_str());
+		token_weights[token] = weight;
+	}
+
+	input_weights.close();
+
+	vector<int> vec(token_weights, token_weights + stats.num_terms);
+	stats.token_weights = vec;
+
+	// read sets
+	ifstream input_sets(sets_filename.c_str());
 	int accumulatedsize = 0;
 	int set_id = 0;
 
-	while (!input.eof()) {
-		getline(input, line);
+	while (!input_sets.eof()) {
+		getline(input_sets, line);
 		if (line == "") continue;
 
 		vector<string> line_spl = split(line, ' ');
@@ -196,26 +246,28 @@ FileStats readInputFile(string &filename, vector<Entry> &entries, vector<string>
 		biggestQuerySize = max((int)tokens.size(), biggestQuerySize);
 
 		int size = tokens.size();
+		int weighted_size = 0;
 		stats.sizes.push_back(size);
 		stats.start.push_back(accumulatedsize);
 		accumulatedsize += size;
 
 		for (int i = 0; i < size; i++) {
 			int term_id = atoi(tokens[i].c_str());
-			stats.num_terms = max(stats.num_terms, term_id + 1);
 			entries.push_back(Entry(set_id, term_id));
+			weighted_size += stats.token_weights.at(term_id);
 		}
+		stats.weighted_sizes.push_back(weighted_size);
 		set_id++;
 	}
 
 	stats.num_sets = stats.start.size();
 
-	input.close();
+	input_sets.close();
 
 	return stats;
 }
 
-void allocVariables(DeviceVariables *dev_vars, float threshold, int num_sets, Similarity** distances) {
+void allocVariables(DeviceVariables *dev_vars, float threshold, int num_sets, int num_terms, Similarity** distances) {
 	dim3 grid, threads;
 
 	get_grid_config(grid, threads);
@@ -223,7 +275,8 @@ void allocVariables(DeviceVariables *dev_vars, float threshold, int num_sets, Si
 	gpuAssert(cudaMalloc(&dev_vars->d_dist, num_sets * sizeof(Similarity))); // distance between all the sets and the query doc
 	gpuAssert(cudaMalloc(&dev_vars->d_result, num_sets * sizeof(Similarity))); // compacted similarities between all the sets and the query doc
 	gpuAssert(cudaMalloc(&dev_vars->d_sim, num_sets * sizeof(int))); // count of elements in common
-	gpuAssert(cudaMalloc(&dev_vars->d_sizes, num_sets * sizeof(int))); // size of all sets
+	gpuAssert(cudaMalloc(&dev_vars->d_wsizes, num_sets * sizeof(int))); // weighted size of all sets
+	gpuAssert(cudaMalloc(&dev_vars->d_tokweights, num_terms * sizeof(int))); // weights of each token
 	gpuAssert(cudaMalloc(&dev_vars->d_query, biggestQuerySize * sizeof(Entry))); // query
 	gpuAssert(cudaMalloc(&dev_vars->d_index, biggestQuerySize * sizeof(int)));
 	gpuAssert(cudaMalloc(&dev_vars->d_count, biggestQuerySize * sizeof(int)));
@@ -242,7 +295,8 @@ void freeVariables(DeviceVariables *dev_vars, InvertedIndex &index, Similarity**
 	cudaFree(dev_vars->d_dist);
 	cudaFree(dev_vars->d_result);
 	cudaFree(dev_vars->d_sim);
-	cudaFree(dev_vars->d_sizes);
+	cudaFree(dev_vars->d_wsizes);
+	cudaFree(dev_vars->d_tokweights);
 	cudaFree(dev_vars->d_query);
 	cudaFree(dev_vars->d_index);
 	cudaFree(dev_vars->d_count);
@@ -268,9 +322,10 @@ void processTestFile(InvertedIndex &index, FileStats &stats, string &filename, v
 	DeviceVariables dev_vars;
 	Similarity* distances;
 
-	allocVariables(&dev_vars, threshold, index.num_sets, &distances);
+	allocVariables(&dev_vars, threshold, index.num_sets, stats.num_terms, &distances);
 
-	cudaMemcpyAsync(dev_vars.d_sizes, &stats.sizes[0], index.num_sets * sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpyAsync(dev_vars.d_wsizes, &stats.weighted_sizes[0], index.num_sets * sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpyAsync(dev_vars.d_tokweights, &stats.token_weights[0], stats.num_terms * sizeof(int), cudaMemcpyHostToDevice);
 
 	double start = gettime();
 
@@ -279,7 +334,7 @@ void processTestFile(InvertedIndex &index, FileStats &stats, string &filename, v
 
 		num_test_local++;
 
-		int totalSimilars = findSimilars(index, threshold, topk, topk_is_strict, &dev_vars, distances, setid, stats.start[setid], stats.sizes[setid]);
+		int totalSimilars = findSimilars(index, threshold, topk, topk_is_strict, &dev_vars, distances, setid, stats.start[setid], stats.sizes[setid], stats.weighted_sizes[setid]);
 
 #if OUTPUT
 		for (int i = 0; i < totalSimilars; i++) {
