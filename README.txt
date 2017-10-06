@@ -10,7 +10,7 @@ this package.
 cuCompactor were developed by Davide Spataro: https://github.com/knotman90/cuStreamComp
 We used some code developed by Wisllay Vitrio and Mateus Freitas: https://github.com/mateusffreitas/FT-kNN
 
-Usage: <executable> <input_file> <threshold> <output_file> <number_of_gpus>
+Usage: <executable> <input_token_file> <input_weights_file> <threshold> <topk> <topk_mode> <output_file> <number_of_gpus>
 
 File format:
 
