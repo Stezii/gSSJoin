@@ -44,7 +44,8 @@ struct Similarity {
 };
 
 struct DeviceVariables{
-	int *d_count, *d_index, *d_sim, *d_wsizes, *d_tokweights, *d_bC, *d_bO;
+    int *d_count, *d_index, *d_bC, *d_bO;
+    float *d_sim, *d_wsizes, *d_tokweights;
     Entry *d_query;
     Similarity *d_dist, *d_result;
 };

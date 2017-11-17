@@ -50,9 +50,9 @@ struct FileStats {
 	int num_terms;
 
 	vector<int> sizes; // set sizes
-	vector<int> weighted_sizes; // weighted set sizes
+	vector<float> weighted_sizes; // weighted set sizes
 	vector<int> start; // beginning of each entry
-	vector<int> token_weights; // weights of each token
+	vector<float> token_weights; // weights of each token
 
 	FileStats() : num_sets(0), num_terms(0) {}
 };
@@ -194,7 +194,7 @@ FileStats readInputFiles(string &sets_filename, string &weights_filename, vector
 
 		vector<string> line_spl = split(line, ' ');
 		int token = atoi(line_spl[0].c_str());
-		int weight = atoi(line_spl[1].c_str());
+		float weight = atof(line_spl[1].c_str());
 		if (stats.num_terms == 1 && token != 1) {
 			cerr << "Error in " << weights_filename << ": First token id must be 1 in " << endl;
 			exit(1);
@@ -213,7 +213,7 @@ FileStats readInputFiles(string &sets_filename, string &weights_filename, vector
 	// read weights
 	input_weights.clear();
 	input_weights.seekg(0, ios::beg);
-	int token_weights[stats.num_terms];
+	float token_weights[stats.num_terms];
 
 	while (!input_weights.eof()) {
 		getline(input_weights, line);
@@ -221,13 +221,13 @@ FileStats readInputFiles(string &sets_filename, string &weights_filename, vector
 
 		vector<string> line_spl = split(line, ' ');
 		int token = atoi(line_spl[0].c_str());
-		int weight = atoi(line_spl[1].c_str());
+		float weight = atof(line_spl[1].c_str());
 		token_weights[token] = weight;
 	}
 
 	input_weights.close();
 
-	vector<int> vec(token_weights, token_weights + stats.num_terms);
+	vector<float> vec(token_weights, token_weights + stats.num_terms);
 	stats.token_weights = vec;
 
 	// read sets
@@ -246,7 +246,7 @@ FileStats readInputFiles(string &sets_filename, string &weights_filename, vector
 		biggestQuerySize = max((int)tokens.size(), biggestQuerySize);
 
 		int size = tokens.size();
-		int weighted_size = 0;
+		float weighted_size = 0;
 		stats.sizes.push_back(size);
 		stats.start.push_back(accumulatedsize);
 		accumulatedsize += size;
@@ -274,9 +274,9 @@ void allocVariables(DeviceVariables *dev_vars, float threshold, int num_sets, in
 
 	gpuAssert(cudaMalloc(&dev_vars->d_dist, num_sets * sizeof(Similarity))); // distance between all the sets and the query doc
 	gpuAssert(cudaMalloc(&dev_vars->d_result, num_sets * sizeof(Similarity))); // compacted similarities between all the sets and the query doc
-	gpuAssert(cudaMalloc(&dev_vars->d_sim, num_sets * sizeof(int))); // count of elements in common
-	gpuAssert(cudaMalloc(&dev_vars->d_wsizes, num_sets * sizeof(int))); // weighted size of all sets
-	gpuAssert(cudaMalloc(&dev_vars->d_tokweights, num_terms * sizeof(int))); // weights of each token
+	gpuAssert(cudaMalloc(&dev_vars->d_sim, num_sets * sizeof(float))); // count of elements in common
+	gpuAssert(cudaMalloc(&dev_vars->d_wsizes, num_sets * sizeof(float))); // weighted size of all sets
+	gpuAssert(cudaMalloc(&dev_vars->d_tokweights, num_terms * sizeof(float))); // weights of each token
 	gpuAssert(cudaMalloc(&dev_vars->d_query, biggestQuerySize * sizeof(Entry))); // query
 	gpuAssert(cudaMalloc(&dev_vars->d_index, biggestQuerySize * sizeof(int)));
 	gpuAssert(cudaMalloc(&dev_vars->d_count, biggestQuerySize * sizeof(int)));
@@ -324,8 +324,8 @@ void processTestFile(InvertedIndex &index, FileStats &stats, string &filename, v
 
 	allocVariables(&dev_vars, threshold, index.num_sets, stats.num_terms, &distances);
 
-	cudaMemcpyAsync(dev_vars.d_wsizes, &stats.weighted_sizes[0], index.num_sets * sizeof(int), cudaMemcpyHostToDevice);
-	cudaMemcpyAsync(dev_vars.d_tokweights, &stats.token_weights[0], stats.num_terms * sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpyAsync(dev_vars.d_wsizes, &stats.weighted_sizes[0], index.num_sets * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpyAsync(dev_vars.d_tokweights, &stats.token_weights[0], stats.num_terms * sizeof(float), cudaMemcpyHostToDevice);
 
 	double start = gettime();
 

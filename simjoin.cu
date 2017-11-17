@@ -77,18 +77,19 @@ struct printSimilarity
 };
 
 __host__ int findSimilars(InvertedIndex inverted_index, float threshold, int topk, bool topk_is_strict, struct DeviceVariables *dev_vars, Similarity* distances,
-		int docid, int querystart, int querysize, int weighted_querysize) {
+		int docid, int querystart, int querysize, float weighted_querysize) {
 
 	dim3 grid, threads;
 	get_grid_config(grid, threads);
 
 	int num_sets = inverted_index.num_sets - docid - 1;
-	int *d_count = dev_vars->d_count, *d_index = dev_vars->d_index, *d_sim = dev_vars->d_sim, *weighted_size_doc = dev_vars->d_wsizes, *token_weights = dev_vars->d_tokweights;
+	int *d_count = dev_vars->d_count, *d_index = dev_vars->d_index;
+	float *d_sim = dev_vars->d_sim, *weighted_size_doc = dev_vars->d_wsizes, *token_weights = dev_vars->d_tokweights;
 	int *d_BlocksCount = dev_vars->d_bC, *d_BlocksOffset = dev_vars->d_bO;
 	Entry *d_query = inverted_index.d_entries + querystart;
 	Similarity *d_similarity = dev_vars->d_dist, *d_result = dev_vars->d_result;
 
-	gpuAssert(cudaMemset(d_sim + docid + 1, 0, num_sets*sizeof(int)));
+	gpuAssert(cudaMemset(d_sim + docid + 1, 0, num_sets*sizeof(float)));
 
 	get_term_count_and_tf_idf<<<grid, threads>>>(inverted_index, d_query, d_count, querysize);
 
@@ -124,7 +125,7 @@ __host__ int findSimilars(InvertedIndex inverted_index, float threshold, int top
 	return totalSimilars;
 }
 
-__global__ void calculateJaccardSimilarity(InvertedIndex inverted_index, Entry *d_query, int *index, int *dist, int D, int docid, int *token_weights) {
+__global__ void calculateJaccardSimilarity(InvertedIndex inverted_index, Entry *d_query, int *index, float *dist, int D, int docid, float *token_weights) {
 	__shared__ int N;
 
 	if (threadIdx.x == 0) {
@@ -187,7 +188,7 @@ __global__ void get_term_count_and_tf_idf(InvertedIndex inverted_index, Entry *q
 	}
 }
 
-__global__ void filter_registers(int *sim, float threshold, int querysize, int docid, int N, int *doc_size, Similarity *similars) { // similars + id_doc
+__global__ void filter_registers(float *sim, float threshold, float querysize, int docid, int N, float *doc_size, Similarity *similars) { // similars + id_doc
 	N -= (docid + 1);
 	int block_size = N / gridDim.x + (N % gridDim.x == 0 ? 0 : 1);		//Partition size
 	int offset = block_size * (blockIdx.x) + docid + 1; 				//Beginning of the block

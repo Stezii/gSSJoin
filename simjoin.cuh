@@ -31,12 +31,12 @@
 #include "inverted_index.cuh"
 
 __host__ int findSimilars(InvertedIndex inverted_index, float threshold, int topk, bool topk_is_strict, struct DeviceVariables *dev_vars, Similarity* distances,
-		int docid, int querystart, int querysize, int weighted_querysize);
+		int docid, int querystart, int querysize, float weighted_querysize);
 
-__global__ void calculateJaccardSimilarity(InvertedIndex inverted_index, Entry *d_query, int *index, int *dist, int D, int docid, int *token_weights);
+__global__ void calculateJaccardSimilarity(InvertedIndex inverted_index, Entry *d_query, int *index, float *dist, int D, int docid, float *token_weights);
 
 __global__ void get_term_count_and_tf_idf(InvertedIndex inverted_index, Entry *query, int *count, int N);
 
-__global__ void filter_registers(int *sim, float threshold, int querysize, int docid, int N, int *doc_size, Similarity *similars);
+__global__ void filter_registers(float *sim, float threshold, float querysize, int docid, int N, float *doc_size, Similarity *similars);
 
 #endif /* KNN_CUH_ */
