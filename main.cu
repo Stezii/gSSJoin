@@ -213,7 +213,7 @@ FileStats readInputFiles(string &sets_filename, string &weights_filename, vector
 	// read weights
 	input_weights.clear();
 	input_weights.seekg(0, ios::beg);
-	float token_weights[stats.num_terms];
+	float *token_weights = (float *) malloc(stats.num_terms * sizeof(float));
 
 	while (!input_weights.eof()) {
 		getline(input_weights, line);
@@ -228,6 +228,9 @@ FileStats readInputFiles(string &sets_filename, string &weights_filename, vector
 	input_weights.close();
 
 	vector<float> vec(token_weights, token_weights + stats.num_terms);
+	
+	free(token_weights);
+	
 	stats.token_weights = vec;
 
 	// read sets
